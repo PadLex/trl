@@ -90,6 +90,10 @@ class PPOConfig:
     """Range for clipping values in loss calculation"""
     vf_coef: float = 0.1
     """Scaling factor for value loss"""
+    entropy_coef: float = 0.0
+    """Scaling factor for entropy loss"""
+    batch_entropy_coef: float = 0.0
+    """Scaling factor for batch entropy loss"""
     batch_size: int = 128
     """Number of samples per optimisation step"""
     forward_batch_size: Optional[int] = None
@@ -173,6 +177,8 @@ class PPOConfig:
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
         assert self.kl_penalty in ["kl", "abs", "mse", "full"]
+
+        print("PPOConfig: ", self.to_dict())
 
     def to_dict(self):
         output_dict = {}

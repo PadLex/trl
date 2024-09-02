@@ -50,7 +50,7 @@ from ..core import (
     masked_whiten,
     set_seed,
     stack_dicts,
-    stats_to_np,
+    stats_to_np, cross_batch_entropy,
 )
 from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
 from ..models import (
@@ -1090,10 +1090,10 @@ class PPOTrainer(BaseTrainer):
                 Dictionary of training statistics
         """
         self.model.train()
-        loss_p, loss_v, train_stats = self.loss(
+        loss_p, loss_v, loss_e, loss_be, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
-        loss = loss_p + loss_v
+        loss = loss_p + loss_v + loss_e + loss_be
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
             if self.accelerator.sync_gradients:
@@ -1234,7 +1234,14 @@ class PPOTrainer(BaseTrainer):
         pg_loss = masked_mean(torch.max(pg_losses, pg_losses2), mask)
         pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).float(), mask)
 
-        loss = pg_loss + self.config.vf_coef * vf_loss
+        entropy = masked_mean(entropy_from_logits(logits), mask)
+        batch_entropy, mean_pd = cross_batch_entropy(logits)
+
+        loss = pg_loss + self.config.vf_coef * vf_loss - self.config.entropy_coef * entropy - self.config.batch_entropy_coef * batch_entropy
+
+        print("loss: ", pg_loss, self.config.vf_coef * vf_loss, -self.config.entropy_coef * entropy, -self.config.batch_entropy_coef * batch_entropy)
+        print(batch_entropy)
+
 
         avg_ratio = masked_mean(ratio, mask).item()
         if avg_ratio > self.config.ratio_threshold:
@@ -1244,8 +1251,6 @@ class PPOTrainer(BaseTrainer):
             pg_loss = pg_loss * 0.0
             vf_loss = vf_loss * 0.0
             loss = loss * 0.0
-
-        entropy = masked_mean(entropy_from_logits(logits), mask)
 
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
         policykl = masked_mean(old_logprobs - logprobs, mask)
@@ -1257,6 +1262,8 @@ class PPOTrainer(BaseTrainer):
             loss=dict(policy=pg_loss.detach(), value=vf_loss.detach(), total=loss.detach()),
             policy=dict(
                 entropy=entropy.detach(),
+                batch_entropy=batch_entropy.detach(),
+                batch_max_action=mean_pd.max().detach(),
                 approxkl=approxkl.detach(),
                 policykl=policykl.detach(),
                 clipfrac=pg_clipfrac.detach(),
@@ -1273,7 +1280,7 @@ class PPOTrainer(BaseTrainer):
                 var=value_var.detach(),
             ),
         )
-        return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
+        return pg_loss, self.config.vf_coef * vf_loss, -self.config.entropy_coef * entropy, -self.config.batch_entropy_coef * batch_entropy, flatten_dict(stats)
 
     def record_step_stats(self, kl_coef: float, **data):
         """

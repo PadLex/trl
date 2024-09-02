@@ -157,6 +157,32 @@ def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: Optional[bool] =
         return (values * mask).sum() / mask.sum()
 
 
+def cross_batch_entropy(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute the entropy of the average distribution across a batch of logits.
+
+    Parameters:
+    - logits: torch.Tensor of shape [batch_size, sequence_length, num_classes]
+
+    Returns:
+    - A torch.Tensor containing the entropy of the averaged distribution.
+    - A torch.Tensor containing the averaged distribution.
+    """
+    # Step 1: Select the last completion
+    last_logits = logits[:, -1, :]  # Shape: [128, 109]
+    # last_logits = logits[:, :, -1]
+
+    # Step 2: Compute softmax across the logits to obtain a batch of distributions
+    pd = F.softmax(last_logits, dim=1)  # Shape: [128, 109]
+
+    # Step 3: Average the distributions
+    avg_pd = pd.mean(dim=0)  # Shape: [109]
+
+    # Step 4: Compute entropy of the averaged distribution
+    entropy = -(avg_pd * torch.log(avg_pd + 1e-9)).sum()  # Adding a small constant to avoid log(0)
+
+    return entropy, avg_pd
+
 def masked_var(values: torch.Tensor, mask: torch.Tensor, unbiased: bool = True) -> torch.Tensor:
     """Compute variance of tensor with masked values."""
     mean = masked_mean(values, mask)
